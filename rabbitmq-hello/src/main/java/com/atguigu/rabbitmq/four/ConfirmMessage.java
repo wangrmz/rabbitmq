@@ -6,6 +6,8 @@ import com.rabbitmq.client.ConfirmCallback;
 
 import java.io.IOException;
 import java.util.UUID;
+import java.util.concurrent.ConcurrentNavigableMap;
+import java.util.concurrent.ConcurrentSkipListMap;
 import java.util.concurrent.TimeoutException;
 
 /**
@@ -17,6 +19,10 @@ import java.util.concurrent.TimeoutException;
  * 1、单个确认
  * 2、批量确认
  * 3、异步批量确认
+ *
+ * 单独发布消息：同步等待确认，简单，但吞吐量非常有限。
+ * 批量发布消息：批量同步等待确认，简单，合理的吞吐量，一旦出现问题但很难推断出是那条消息出现了问题。
+ * 异步处理：最佳性能和资源使用，在出现错误的情况下可以很好地控制，但是实现起来稍微难些
  **/
 
 public class ConfirmMessage {
@@ -40,6 +46,7 @@ public class ConfirmMessage {
 
 //        3、异步批量确认
         ConfirmMessage.publishMessageAsync();// 发布1000个异步确认消息，耗时17ms
+                                             // 处理后 发布1000个异步确认消息，耗时20ms
 
     }
 
@@ -104,6 +111,9 @@ public class ConfirmMessage {
     /**
      * 异步确认虽然编程逻辑比上两个要复杂，但是性价比最高，无论是可靠性还是效率都没得说，
      * 他是利用回调函数来达到消息可靠性传递的，这个中间件也是通过函数回调来保证是否投递成功，
+     * <p>
+     * 最好的解决的解决方案就是把未确认的消息放到一个基于内存的能被发布线程访问的队列，
+     * 比如说用 ConcurrentLinkedQueue 这个队列在 confirm callbacks 与发布线程之间进行消息的传递
      *
      * @throws IOException
      * @throws TimeoutException
@@ -116,12 +126,33 @@ public class ConfirmMessage {
         channel.queueDeclare(queueName, true, false, false, null);
         // 开启发布确认
         channel.confirmSelect();
+        /**
+         * 线程安全有序的一个hash表，适用于高并发的情况
+         * 1、轻松的讲序号与消息进行关联
+         * 2、轻松批量删除消息，key是消息的序号
+         * 3、支持高并发
+         */
+
+        ConcurrentSkipListMap<Long, String> outstandingConfirms = new ConcurrentSkipListMap<>();
+
+
         //开始时间
         long begin = System.currentTimeMillis();
         /**
          * 确认收到，消息确认成功回调函数
+         * 1、消息的标记
+         * 2、是否未批量确认
          */
         ConfirmCallback ackCallback = (e1, e2) -> {
+            // 2、删除已经确认的消息 剩下的就是未确认的消息
+            if (e2) {
+                ConcurrentNavigableMap<Long, String> confirmed = outstandingConfirms.headMap(e1);
+                confirmed.clear();
+            } else {
+                // 直接清除
+                outstandingConfirms.remove(e1);
+            }
+
             System.out.println("确认的消息：" + e1);
         };
 
@@ -132,16 +163,30 @@ public class ConfirmMessage {
          * 2、是否未批量确认
          */
         ConfirmCallback nackCallback = (e1, e2) -> {
+            // 3、打印未确认的消息
             //记录
-            System.out.println("未确认的消息：" + e1);
+
+            String message = outstandingConfirms.get(e1);
+            System.out.println("未确认的消息tag：" + e1 + " =====" + message);
+
+
         };
 
         // 准备消息的监听器 监听那些消息成功，那些失败？
+        // 监听器的线程2
         channel.addConfirmListener(ackCallback, nackCallback); //异步
+        // very important
+        // 未确认的消息放到一个基于内存的能被发布线程访问的队列，
+        // 比如说用 ConcurrentLinkedQueue 这个队列在 confirm callbacks 与发布线程之间进行消息的传递
 
+        // 发送消息的线程1
         for (int i = 1; i < MESSAGE_COUNT; i++) {
             String message = i + "";
             channel.basicPublish("", queueName, null, message.getBytes());
+            // 1、记录下所有要发送的消息，消息总和
+            // 信道中消息的序号
+            outstandingConfirms.put(channel.getNextPublishSeqNo(), message);
+
         }
 
         // 结束时间
