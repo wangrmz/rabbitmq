@@ -33,6 +33,22 @@ public class Producer {
         // 2、创建信道,信道来发送消息，链接中有多个信道
         Channel channel = connection.createChannel();
 
+        /**
+         * 惰性队列：消息保存在内存中还是磁盘上
+         * 正常情况：消息保存在内存中
+         * 惰性队列：消息保存在磁盘中
+         * 使用场景：消费者下线、宕机亦或者是由于维护而关闭等)而致
+         * 使长时间内不能消费消息造成堆积时，惰性队列就很有必要了
+         *
+         * Map<String, Object> args = new HashMap<String, Object>();
+         * args.put("x-queue-mode", "lazy");
+         * channel.queueDeclare("myqueue", false, false, false, args);
+         *
+         *
+         * 内存开销对比：
+         * 在发送 1 百万条消息，每条消息大概占 1KB 的情况下，普通队列占用内存是 1.2GB，而惰性队列仅仅
+         * 占用 1.5MB； 惰性队列内存消耗小，但是消费比较慢
+         */
 
         // 3、生成一个队列
         /**
