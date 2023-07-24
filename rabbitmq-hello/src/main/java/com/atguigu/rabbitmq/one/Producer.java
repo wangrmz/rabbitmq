@@ -4,6 +4,8 @@ import com.rabbitmq.client.*;
 
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
+import java.util.HashMap;
+import java.util.Map;
 import java.util.concurrent.TimeoutException;
 
 /**
@@ -41,11 +43,33 @@ public class Producer {
          * 5、其他参数，延迟，死信
          */
 
-        channel.queueDeclare(QUEUE_NAME,false,false,false,null);
+        /**
+         * 实现优先级队列
+         * 1.队列需设置为优先级队列
+         * 2.消息需设置优先级
+         * 注： 消费者需等消息全部进入队列后再消费，消息才能进行优先级排队
+         */
+
+        Map<String,Object> arguments=new HashMap<>();
+        // 官方允许0-255，超过范围报错，这里设置为10，允许为0-10，不建议设置太大，会浪费cpu和内存
+        arguments.put("x-max-priority",10);
+        channel.queueDeclare(QUEUE_NAME,true,false,false,arguments);
 
 
+        // 发送一堆消息进行测试优先级队列，消息全部进行队列后在进行消费，按照优先级进行消费
+        //
+        for (int i = 1; i < 11 ; i++) {
+            String message="info-" + i;
+            if(i==5){ // 优先级构建
+              AMQP.BasicProperties properties=new AMQP.BasicProperties()
+                      .builder().priority(5).build();
+                channel.basicPublish("",QUEUE_NAME,properties,message.getBytes());
+            }else {
+                channel.basicPublish("",QUEUE_NAME,null,message.getBytes());
+            }
+        }
         // 4、发送消息
-        String message="hello world";
+        // String message="hello world";
 
         /**
          * 1、发送到哪个交换机
@@ -53,8 +77,8 @@ public class Producer {
          * 3、其他参数
          * 4、消息主体
          */
-        channel.basicPublish("",QUEUE_NAME,null,message.getBytes());
-        System.out.println("消息已发送");
+//        channel.basicPublish("",QUEUE_NAME,null,message.getBytes());
+//        System.out.println("消息已发送");
 
 
     }
